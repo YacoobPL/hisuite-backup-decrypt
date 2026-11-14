@@ -66,6 +66,9 @@ def cmd_decrypt(args: argparse.Namespace) -> int:
     failed = sum(r.status == "failed" for r in results)
     skipped = sum(r.status == "skipped" for r in results)
     print(f"{len(results) - failed - skipped} decrypted, {skipped} skipped, {failed} failed -> {out}")
+    if results and failed == len(results):
+        print("hint: every module failed. The password may be wrong, or the backup may come from an "
+              "unsupported HiSuite version (10.x and older: use kobackupdec).", file=sys.stderr)
     if args.export:
         _export_from(out, out / "export", _tz(args.timezone))
     return 1 if failed and failed == len(results) else 0

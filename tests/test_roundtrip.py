@@ -170,6 +170,26 @@ class BackupTests(unittest.TestCase):
         self.assertNotIn(PASSWORD.decode(), buf.getvalue())
 
 
+class JunkFilesTest(unittest.TestCase):
+    def test_os_metadata_files_are_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = make_backup(Path(tmp) / "backup")
+            (src / "Memo" / "._Memo.db").write_bytes(os.urandom(300))     # macOS AppleDouble
+            (src / "Memo" / ".DS_Store").write_bytes(os.urandom(50))
+            (src / "Memo" / "Thumbs.db").write_bytes(os.urandom(50))
+            (src / "._calendar.db").write_bytes(os.urandom(300))
+            results = backup.decrypt_backup(src, Path(tmp) / "out", PASSWORD)
+            self.assertEqual(sorted(r.source.name for r in results), ["Memo.db", "calendar.db"])
+            self.assertEqual({r.status for r in results}, {"ok"})
+
+    def test_wrong_password_message_mentions_unsupported_versions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = make_backup(Path(tmp) / "backup")
+            with self.assertRaises(crypto.WrongPasswordError) as ctx:
+                backup.decrypt_backup(src, Path(tmp) / "out", b"nope")
+            self.assertIn("unsupported HiSuite version", str(ctx.exception))
+
+
 class MediaSkipTest(unittest.TestCase):
     def test_enc_media_is_skipped_not_failed(self):
         with tempfile.TemporaryDirectory() as tmp:

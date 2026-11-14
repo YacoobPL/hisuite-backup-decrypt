@@ -101,7 +101,7 @@ def describe(backup: Path) -> dict:
 
 def locate_files(backup: Path, module: Module) -> list[Path]:
     """Find encrypted files that belong to *module* (``<name>.db``, ``<name>/...``, ...)."""
-    by_lower = {p.name.lower(): p for p in backup.iterdir()}
+    by_lower = {p.name.lower(): p for p in backup.iterdir() if not _is_junk(p)}
     found: list[Path] = []
     for suffix in (".db", ".tar", ".zip", ""):
         p = by_lower.get((module.name + suffix).lower())
@@ -109,8 +109,17 @@ def locate_files(backup: Path, module: Module) -> list[Path]:
             found.append(p)
     folder = by_lower.get(module.name.lower())
     if folder is not None and folder.is_dir():
-        found.extend(sorted(f for f in folder.rglob("*") if f.is_file()))
+        found.extend(sorted(f for f in folder.rglob("*") if f.is_file() and not _is_junk(f)))
     return found
+
+
+JUNK_NAMES = {".ds_store", "thumbs.db", "desktop.ini"}
+
+
+def _is_junk(path: Path) -> bool:
+    """OS metadata that is not part of the backup (macOS ``._*`` AppleDouble files, thumbnails)."""
+    name = path.name.lower()
+    return name.startswith("._") or name in JUNK_NAMES
 
 
 def verify_password(backup: Path, password: bytes) -> dict[str, bool | None]:
@@ -134,7 +143,9 @@ def decrypt_backup(backup: Path, out_dir: Path, password: bytes, *, allow_legacy
     checks = verify_password(backup, password)
     checked = [v for v in checks.values() if v is not None]
     if checked and not any(checked):
-        raise crypto.WrongPasswordError("password does not match checkMsgV3 of any module")
+        raise crypto.WrongPasswordError(
+            "the password does not match checkMsgV3 of any module: either it is wrong, or the backup "
+            "comes from an unsupported HiSuite version (for HiSuite 10.x and older use kobackupdec)")
 
     results: list[Result] = []
     for module in parse_info_xml(backup / "info.xml"):

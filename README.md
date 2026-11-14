@@ -8,6 +8,9 @@ HiSuite stores most data as encrypted SQLite databases (`Memo.db`, `calendar.db`
 Huawei's own docs say these files cannot be opened on a computer. Existing open-source tools
 ([kobackupdec][kobackupdec], [Huawei-Backup-V4-Decrypt][v4]) target older backups or the
 phone-side KoBackup app and failed on a HiSuite 14 backup, which is why this project exists.
+Forum posts agree: users report that `kobackupdec` works up to HiSuite 10.x and produces
+undecryptable `.db`/`.tar` files from HiSuite 11 onwards. For HiSuite 10.x and older, use
+`kobackupdec`.
 
 > **This is not a password cracker.** It needs the password you chose when making the backup.
 > Use it only on backups you own.
@@ -20,7 +23,8 @@ phone-side KoBackup app and failed on a HiSuite 14 backup, which is why this pro
 | Works | all 17 database modules in that backup decrypt with a verified authentication tag |
 | Export verified | notes, calendar, contacts, call log, SMS + MMS text and MMS attachments (record counts match the counts HiSuite stores in `info.xml`; extracted attachment bytes match the database exactly) |
 | **Not supported** | multimedia archives (`*.tar.enc`, `*_MediaInfo.db.enc`): photos, videos, audio, documents, voice recordings. They use a different key scheme that I could not work out; they are reported as `skipped` |
-| Untested | other HiSuite versions / devices. An unauthenticated AES-CTR fallback for older backups exists but is untested on real old backups |
+| Untested | other HiSuite versions / devices. HiSuite 13.x probably works (publicly posted `backupinfo.ini` files from 13.0.0.310 and 14.0.0.320 have the same fields), but I have not tried it. An unauthenticated AES-CTR fallback for older backups exists but is untested on real old backups |
+| Different format | HarmonyOS backups (an `info.json` with `backupKey`, `backupSalt` and per-module `encryptionIv`) are a different scheme and are **not** supported |
 
 Reports and pull requests for other versions and for the multimedia format are very welcome
 (please **never** attach a real backup to an issue).
@@ -95,6 +99,38 @@ Details that cost time: the extra 16 bytes at the end of each file (file size = 
 are the GCM tag, so a plain AES-CTR attempt produces garbage that never looks like SQLite;
 `backupinfo.ini` is UTF-16 with a BOM; the fields `derivedSalt`, `pwdsalt`, `pwdsalt_iv` and
 `password` in it are **not** needed for the database modules.
+
+## Multimedia (`*.enc`): what was tried
+
+The multimedia archives (`<module>/storage/.../*.tar.enc`, with a 16-byte `<Iv>` in `picture.xml`,
+`video.xml`, ...) and `image_MediaInfo.db.enc` / `video_MediaInfo.db.enc` (IV in `image_iv` /
+`video_iv` of `backupinfo.ini`) are plain streams: their size is a multiple of 512 / 4096
+bytes, there is no tag and no repeated 16-byte blocks (so not ECB). `info.xml` has no `encMsgV3`
+for them. The oracle used was `ustar` at offset 257 of the decrypted tar (and the SQLite magic).
+All of these failed with the correct password (not every mode/key combination was tried; the
+list shows the families covered):
+
+* AES-128/256 in CTR, CBC, CFB, OFB, ECB and GCM (streaming, no tag check), with the key taken as
+  `SHA-256(password)` (full and first 16 bytes), `MD5`, the old `SHA1PRNG` derivation, or
+  `PBKDF2-HMAC-SHA256(password, salt, n)` for `n` from 1 to 100000 and the salts
+  `derivedSalt`, `pwdsalt` (whole / first 16 / first 32 bytes), `pwdsalt_iv`, the `<Iv>` or no salt;
+* unwrapping the `password` blob of `backupinfo.ini` with those keys.
+
+Ideas not yet tried: decompiling the KoBackup app that performs the backup. Workarounds that
+users report: restoring the backup to a Huawei phone with HiSuite (decrypts everything), or
+creating the backup with an old HiSuite (10.x) and decrypting it with `kobackupdec`.
+
+## Troubleshooting
+
+* **`wrong password ... unsupported HiSuite version`** - the password does not match
+  `checkMsgV3`. Check it, or the backup is from a version this tool does not understand.
+* **Special characters in the password** (`#`, `!`, spaces, non-ASCII) cause trouble when
+  passed on a command line; that is why this tool takes the password from a prompt, a file or
+  `$HISUITE_PASSWORD`. The password is used as UTF-8.
+* **Forgot the password?** This tool cannot help, and I deliberately did not add a
+  guessing/brute-force mode.
+* Files that are not part of the backup (macOS `._*` files, `.DS_Store`, `Thumbs.db`) are
+  ignored.
 
 ## Security notes
 
