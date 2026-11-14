@@ -116,9 +116,26 @@ list shows the families covered):
   `derivedSalt`, `pwdsalt` (whole / first 16 / first 32 bytes), `pwdsalt_iv`, the `<Iv>` or no salt;
 * unwrapping the `password` blob of `backupinfo.ini` with those keys.
 
-Ideas not yet tried: decompiling the KoBackup app that performs the backup. Workarounds that
-users report: restoring the backup to a Huawei phone with HiSuite (decrypts everything), or
-creating the backup with an old HiSuite (10.x) and decrypting it with `kobackupdec`.
+* PBKDF2 with SHA-1/224/384/512 and MD5 (not only SHA-256) over the same salts and iteration
+  counts, with AES in CTR, CBC and CFB128, using the `<Iv>` / zero / `pwdsalt_iv` as IV, with the
+  derived bytes used raw or as a hex string.
+
+### Where the multimedia key is *not*
+
+The phone app `KoBackup_N.apk` that ships with HiSuite (decompiled with jadx) contains the
+`BackupSecurityV3` class: it encrypts with AES-GCM, derives the key as
+`PBKDF2(password, seed given as a hex string)`, verifies passwords with `checkMsgV3`, and falls
+back to AES-CTR for old backups. That matches what this tool does for the database modules.
+The fields `derivedSalt`, `pwdsalt`, `image_iv`, `video_iv` and `mdataisencypt`, however, do not
+appear in `KoBackup_N.apk`, `LocalBackup.apk` or `HiSuite.apk`; they only appear in the native
+PC program `HiSuite.exe`. That program uses low-level OpenSSL (`AES_cbc_encrypt`,
+`CRYPTO_ctr128_encrypt`; `CommBase.dll` also has `AES_cfb128_encrypt` and `PKCS5_PBKDF2_HMAC`),
+so the multimedia key is most likely derived in native PC code. The next step would be
+disassembling `HiSuite.exe` / `CommBase.dll` (for example with Ghidra).
+
+Workarounds that users report: restoring the backup to a Huawei phone with HiSuite (decrypts
+everything), or creating the backup with an old HiSuite (10.x) and decrypting it with
+`kobackupdec`.
 
 ## Troubleshooting
 
