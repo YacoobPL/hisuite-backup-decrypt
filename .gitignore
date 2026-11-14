@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+
+# Never commit real backups or their decrypted/exported contents
+HUAWEI*/
+*.enc
+decrypted*/
+export*/
+*.db
+*.vcf
+*.ics

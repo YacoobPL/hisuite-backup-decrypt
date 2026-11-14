@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hisuite-backup-decrypt"
+version = "0.1.0"
+description = "Decrypt Huawei HiSuite 14 backups (KoBackup v3) with the backup password and export notes, calendar, contacts, calls and SMS."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = ["pycryptodome>=3.18", "defusedxml>=0.7"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Archiving :: Backup",
+]
+
+[project.scripts]
+hisuite-decrypt = "hisuite_decrypt.cli:main"
+
+[tool.setuptools]
+packages = ["hisuite_decrypt"]
