@@ -119,6 +119,16 @@ class OtherExportTests(unittest.TestCase):
         self.assertIn("s3cret-pass", (out2 / "wifi.csv").read_text(encoding="utf-8-sig"))
         self.assertFalse((out2 / "other" / "wifiConfig").exists())
 
+    def test_databases_extracted_from_attachments_are_not_treated_as_backup_databases(self):
+        make_db(self.src / "weather.db", "CREATE TABLE cityinfo_tb(city_name TEXT);",
+                [("INSERT INTO cityinfo_tb VALUES('Warsaw')", ())])
+        nested = self.src / "export" / "other" / "smartcare" / "attachments"
+        nested.mkdir(parents=True)
+        make_db(nested / "hiboard_database_attachment.db", "CREATE TABLE t(x TEXT);", [("INSERT INTO t VALUES('junk')", ())])
+        summary = export_other.export_others(self.src, self.tmp / "o")
+        self.assertEqual(len(summary), 1)
+        self.assertIn("weather.db", summary[0])
+
     def test_cli_export_flag(self):
         self._wifi()
         buf = io.StringIO()

@@ -166,6 +166,8 @@ def export_others(folder: Path, out_dir: Path, include_secrets: bool = False) ->
         key = db.name.lower()
         if key in HANDLED_BY_OTHER_EXPORTERS or key in seen:
             continue
+        if {"attachments", "note_attachments", "other"} & set(db.relative_to(folder).parts[:-1]):
+            continue  # a database extracted from an attachment by an earlier export, not part of the backup
         seen.add(key)
         stem = db.stem
         if key == "alarm.db":
