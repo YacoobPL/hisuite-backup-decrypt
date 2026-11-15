@@ -59,7 +59,30 @@ python -m hisuite_decrypt export decrypted export
 
 # also include Wi-Fi passwords and the smartcare database (off by default)
 python -m hisuite_decrypt export decrypted export --include-secrets
+
+# name numbers that are not in the backup's contacts, using a vCard exported from Google Contacts
+python -m hisuite_decrypt export decrypted export --contacts-vcf google-contacts.vcf
+
+# MMS folders named just "Name" instead of "Name (number)"
+python -m hisuite_decrypt export decrypted export --names name
 ```
+
+### Contact names
+
+Numbers in `calls.csv` and `messages.csv` are matched to `contact.db`, and the MMS attachment
+folders are named after the contact. Matching ignores spaces, dashes and country-code
+spellings (`+48 600 100 200`, `0048600100200` and `600100200` are the same number, compared by
+their last 9 digits); a number that belongs to two different contacts is left unnamed instead of
+guessed, and non-numeric senders such as `ORANGE` are left alone. All spellings of one number end
+up in one folder.
+
+**Only the phone's local contacts are in a HiSuite backup.** Contacts that live only in a Google
+(or other) account are not included, so some numbers stay unnamed; on one real backup about half
+of the messages could be named. Export those contacts from [Google Contacts](https://contacts.google.com)
+as vCard and pass the file with `--contacts-vcf` (it may be given more than once). Names from
+the backup's own contacts always win over the extra file.
+
+`--names` sets how MMS folders are named: `both` (`Name (number)`, default), `name` or `number`.
 
 The password is read from `--password-file`, from the `HISUITE_PASSWORD` environment variable,
 or from an interactive prompt. There is deliberately **no `--password` flag**: command-line
@@ -74,8 +97,8 @@ A wrong password is detected up front (via `checkMsgV3`) and nothing is written.
 | `Memo` | `notes.txt`, `notes.csv` (bullet lists and to-do items preserved as text) |
 | `calendar` | `calendar.ics` (importable into Google Calendar / Outlook, keeps recurrence and reminders), `calendar.csv` |
 | `contact` | `contacts.vcf` (vCard 3.0), `contacts.csv` |
-| `calllog` | `calls.csv` |
-| `sms` | `messages.csv` (SMS and MMS text) and `mms_attachments/<number>/` with the MMS pictures, videos and vCards, named `date_direction_id_name` and dated like the message |
+| `calllog` | `calls.csv` (with a `name` column, see *Contact names* below) |
+| `sms` | `messages.csv` (SMS and MMS text, with a `name` column) and `mms_attachments/<Name (number)>/` with the MMS pictures, videos and vCards, named `date_direction_id_name` and dated like the message. File names are shortened where needed to stay under the Windows 260-character path limit |
 | `Memo` attachments | `note_attachments/`: the pictures drawn in notes (unpacked from the stored archive; `.hwgraffi` is Huawei's own vector data) |
 | `alarm` | `alarms.csv` |
 | `wifiConfig` | `wifi.csv` (SSID, security, static IP, DNS, proxy). **Passwords are left out** unless you pass `--include-secrets` |

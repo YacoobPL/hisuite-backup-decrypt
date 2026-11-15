@@ -18,7 +18,7 @@ import sqlite3
 import zipfile
 from pathlib import Path
 
-from .export import _ILLEGAL, _connect, _safe_name
+from .export import _ILLEGAL, _connect, _safe_name, fit_filename
 
 HANDLED_BY_OTHER_EXPORTERS = {"memo.db", "calendar.db", "contact.db", "calllog.db", "sms.db"}
 SECRET_DBS = {"wificonfig.db", "smartcare.db"}
@@ -57,7 +57,8 @@ def dump_tables(db: Path, out_dir: Path) -> int:
             if not rows:
                 continue
             headers = [d[0] for d in cur.description]
-            with (out_dir / f"{_safe_name(table, 100)}.csv").open("w", encoding="utf-8-sig", newline="") as f:
+            with (out_dir / fit_filename(out_dir, f"{_safe_name(table, 100)}.csv")).open(
+                    "w", encoding="utf-8-sig", newline="") as f:
                 w = csv.writer(f)
                 w.writerow(headers)
                 for r in rows:
@@ -88,11 +89,11 @@ def extract_attachments(db: Path, out_dir: Path) -> list[str]:
             data = b"".join(chunks)
             out_dir.mkdir(parents=True, exist_ok=True)
             ext = _guess_extension(data)
-            target = out_dir / f"{_safe_name(table, 100)}{ext}"
+            target = out_dir / fit_filename(out_dir, f"{_safe_name(table, 100)}{ext}")
             target.write_bytes(data)
             produced.append(target.relative_to(out_dir).as_posix())
             if ext == ".zip" and zipfile.is_zipfile(target):
-                produced += _unpack_zip(target, out_dir / _safe_name(table, 100), out_dir)
+                produced += _unpack_zip(target, out_dir / fit_filename(out_dir, _safe_name(table, 100)), out_dir)
     return produced
 
 

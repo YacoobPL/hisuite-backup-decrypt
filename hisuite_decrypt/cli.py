@@ -9,7 +9,12 @@ import sys
 from pathlib import Path
 
 from . import backup, crypto, export, export_other
+from .names import STYLES, ContactNames
 
+NAMES_HELP = ("how MMS attachment folders are named: 'both' = 'Name (number)' (default), 'name' = 'Name', "
+              "'number'; the CSV files always get a name column when the number matches a contact")
+VCF_HELP = ("an extra vCard file (e.g. exported from Google Contacts) used to name numbers that are not in the "
+            "backup's own contacts; may be given several times. HiSuite backs up only the phone's local contacts")
 SECRETS_HELP = ("also export Wi-Fi passwords and the smartcare database (which may contain card numbers); "
                 "off by default")
 
@@ -73,18 +78,24 @@ def cmd_decrypt(args: argparse.Namespace) -> int:
         print("hint: every module failed. The password may be wrong, or the backup may come from an "
               "unsupported HiSuite version (10.x and older: use kobackupdec).", file=sys.stderr)
     if args.export:
-        _export_from(out, out / "export", _tz(args.timezone), args.include_secrets)
+        _export_from(out, out / "export", _tz(args.timezone), args.include_secrets, args.names, args.contacts_vcf)
     return 1 if failed and failed == len(results) else 0
 
 
-def _export_from(folder: Path, out: Path, tz: dt.tzinfo | None, include_secrets: bool = False) -> None:
+def _export_from(folder: Path, out: Path, tz: dt.tzinfo | None, include_secrets: bool = False,
+                 name_style: str = "both", contact_files: list[str] | None = None) -> None:
     """Export every database we know how to turn into an open format."""
+    contact_db = next(folder.rglob("contact.db"), None)
+    contacts = ContactNames.from_contact_db(contact_db) if contact_db is not None else None
+    for vcf in contact_files or []:
+        contacts = contacts if contacts is not None else ContactNames()
+        print(f"{'contacts file:':<17} {contacts.add_vcard(Path(vcf))} contacts read from {vcf}")
     jobs = (
         ("Memo.db", "notes", lambda p: export.export_notes(p, out, tz)),
         ("calendar.db", "calendar events", lambda p: export.export_calendar(p, out, tz)),
         ("contact.db", "contacts", lambda p: export.export_contacts(p, out)),
-        ("calllog.db", "calls", lambda p: export.export_calls(p, out, tz)),
-        ("sms.db", "messages", lambda p: export.export_messages(p, out, tz)),
+        ("calllog.db", "calls", lambda p: export.export_calls(p, out, tz, names=contacts)),
+        ("sms.db", "messages", lambda p: export.export_messages(p, out, tz, names=contacts, folder_style=name_style)),
     )
     done = 0
     for filename, label, run in jobs:
@@ -106,7 +117,7 @@ def _export_from(folder: Path, out: Path, tz: dt.tzinfo | None, include_secrets:
 
 def cmd_export(args: argparse.Namespace) -> int:
     folder = Path(args.decrypted)
-    _export_from(folder, Path(args.output), _tz(args.timezone), args.include_secrets)
+    _export_from(folder, Path(args.output), _tz(args.timezone), args.include_secrets, args.names, args.contacts_vcf)
     return 0
 
 
@@ -133,6 +144,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--export", action="store_true", help="also export everything to open formats")
     sp.add_argument("--timezone", help="IANA zone for CSV/TXT timestamps, e.g. Europe/Warsaw (default: system)")
     sp.add_argument("--include-secrets", action="store_true", help=SECRETS_HELP)
+    sp.add_argument("--names", choices=STYLES, default="both", help=NAMES_HELP)
+    sp.add_argument("--contacts-vcf", action="append", metavar="FILE", help=VCF_HELP)
     add_pw(sp)
     sp.set_defaults(func=cmd_decrypt)
 
@@ -141,6 +154,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("output")
     sp.add_argument("--timezone", help="IANA zone, e.g. Europe/Warsaw (default: system)")
     sp.add_argument("--include-secrets", action="store_true", help=SECRETS_HELP)
+    sp.add_argument("--names", choices=STYLES, default="both", help=NAMES_HELP)
+    sp.add_argument("--contacts-vcf", action="append", metavar="FILE", help=VCF_HELP)
     sp.set_defaults(func=cmd_export)
     return p
 

@@ -9,8 +9,12 @@ import re
 import sqlite3
 from collections import defaultdict
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from defusedxml import ElementTree as ET
+
+if TYPE_CHECKING:
+    from .names import ContactNames
 
 NOTES_T = "comhuaweiproviderNotePadbackupnote_items_tb"
 NOTES_NEW = "comhuaweiproviderNotePadbackupnote_items_new_tb"
@@ -84,16 +88,19 @@ CALL_TYPES = {1: "incoming", 2: "outgoing", 3: "missed", 4: "voicemail", 5: "rej
 PHONE_TYPES = {"1": "HOME", "2": "CELL", "3": "WORK", "4": "WORK,FAX", "5": "HOME,FAX", "6": "PAGER", "7": "OTHER"}
 
 
-def export_calls(calllog_db: Path, out_dir: Path, tz: dt.tzinfo | None = None) -> int:
-    """Write ``calls.csv`` (date, number, type, duration in seconds); return row count."""
+def export_calls(calllog_db: Path, out_dir: Path, tz: dt.tzinfo | None = None,
+                 names: "ContactNames | None" = None) -> int:
+    """Write ``calls.csv`` (date, number, name, type, duration in seconds); return row count.
+    *names* (from ``contact.db``) fills the ``name`` column; it is empty for unknown numbers."""
     out_dir.mkdir(parents=True, exist_ok=True)
     with contextlib.closing(_connect(calllog_db)) as con:
         rows = con.execute("SELECT number, date, duration, type FROM calls_tb ORDER BY date DESC").fetchall()
     with (out_dir / "calls.csv").open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["date", "number", "type", "duration_seconds"])
+        w.writerow(["date", "number", "name", "type", "duration_seconds"])
         for r in rows:
-            w.writerow([f"{_local(r['date'], tz):%Y-%m-%d %H:%M:%S}", r["number"] or "",
+            number = r["number"] or ""
+            w.writerow([f"{_local(r['date'], tz):%Y-%m-%d %H:%M:%S}", number, names.lookup(number) if names else "",
                         CALL_TYPES.get(int(r["type"]), f"other({r['type']})"), r["duration"] or 0])
     return len(rows)
 
@@ -159,18 +166,42 @@ def _safe_name(name: str, limit: int = 80) -> str:
     return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(" .")[:limit] or "unnamed"
 
 
-def export_messages(sms_db: Path, out_dir: Path, tz: dt.tzinfo | None = None, attachments: bool = True) -> int:
+MAX_PATH_BUDGET = 240  # stay below the classic Windows MAX_PATH of 260
+
+
+def fit_filename(folder: Path, name: str) -> str:
+    """Shorten *name* (keeping its extension) so that ``folder / name`` stays below MAX_PATH."""
+    budget = MAX_PATH_BUDGET - len(str(folder.resolve())) - 1
+    if len(name) <= budget:
+        return name
+    stem, ext = os.path.splitext(name)
+    ext = ext[:10]
+    return stem[:max(budget - len(ext), 24)] + ext
+
+
+def export_messages(sms_db: Path, out_dir: Path, tz: dt.tzinfo | None = None, attachments: bool = True,
+                    names: "ContactNames | None" = None, folder_style: str = "both") -> int:
     """Write ``messages.csv`` (SMS and MMS text) and, unless *attachments* is False, extract MMS
-    attachments to ``mms_attachments/<number>/``. The ``attachments`` column lists their paths."""
+    attachments to ``mms_attachments/<label>/``. The ``attachments`` column lists their paths.
+
+    With *names* (from ``contact.db``) the ``name`` column is filled and folders are named
+    according to *folder_style*: ``both`` = ``Name (number)``, ``name`` = ``Name``, ``number``."""
     out_dir.mkdir(parents=True, exist_ok=True)
     rows: list[tuple[int, list]] = []
     with contextlib.closing(_connect(sms_db)) as con:
         for r in con.execute("SELECT address, date, type, body FROM sms_tb"):
             direction = {1: "received", 2: "sent"}.get(int(r["type"]), f"other({r['type']})")
-            rows.append((int(r["date"]), ["SMS", direction, r["address"] or "", _local(r["date"], tz), r["body"] or "", ""]))
+            address = r["address"] or ""
+            rows.append((int(r["date"]), ["SMS", direction, address, names.lookup(address) if names else "",
+                                          _local(r["date"], tz), r["body"] or "", ""]))
         addr: dict[int, dict[int, str]] = defaultdict(dict)
         for a in con.execute("SELECT msg_id, address, type FROM addr_tb"):
             addr[a["msg_id"]][int(a["type"])] = a["address"]
+        preferred: dict[str, str] = {}
+        if names is not None:
+            from .names import preferred_forms
+            preferred = preferred_forms([r[0] for r in con.execute("SELECT address FROM sms_tb")]
+                                        + [v for per in addr.values() for v in per.values()])
         parts = defaultdict(list)
         for p in con.execute("SELECT _id, mid, ct, text, name, cl FROM part_tb"):
             parts[p["mid"]].append(p)
@@ -190,21 +221,23 @@ def export_messages(sms_db: Path, out_dir: Path, tz: dt.tzinfo | None = None, at
                 blob = con.execute("SELECT file_data FROM files_mms_tb WHERE _id = ?", (p["_id"],)).fetchone() \
                     if (attachments and has_blobs) else None
                 if blob is not None and blob[0] is not None:
-                    folder = out_dir / "mms_attachments" / _safe_name(who or "unknown")
+                    label_dir = names.label(who, folder_style, preferred) if names else _safe_name(who or "unknown")
+                    folder = out_dir / "mms_attachments" / label_dir
                     folder.mkdir(parents=True, exist_ok=True)
-                    path = folder / f"{when:%Y-%m-%d_%H-%M-%S}_{direction}_{p['_id']}_{_safe_name(label)}"
+                    path = folder / fit_filename(
+                        folder, f"{when:%Y-%m-%d_%H-%M-%S}_{direction}_{p['_id']}_{_safe_name(label)}")
                     path.write_bytes(bytes(blob[0]))
                     os.utime(path, (ms / 1000, ms / 1000))
                     saved.append(path.relative_to(out_dir).as_posix())
                 else:
                     saved.append(f"{label} [not extracted]")
-            rows.append((ms, ["MMS", direction, who, when, text, "; ".join(saved)]))
+            rows.append((ms, ["MMS", direction, who, names.lookup(who) if names else "", when, text, "; ".join(saved)]))
     rows.sort(key=lambda x: x[0], reverse=True)
     with (out_dir / "messages.csv").open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["type", "direction", "address", "date", "body", "attachments"])
-        for _, (kind, direction, who, when, body, files) in rows:
-            w.writerow([kind, direction, who, f"{when:%Y-%m-%d %H:%M:%S}", _ILLEGAL.sub("", body), files])
+        w.writerow(["type", "direction", "address", "name", "date", "body", "attachments"])
+        for _, (kind, direction, who, name, when, body, files) in rows:
+            w.writerow([kind, direction, who, name, f"{when:%Y-%m-%d %H:%M:%S}", _ILLEGAL.sub("", body), files])
     return len(rows)
 
 

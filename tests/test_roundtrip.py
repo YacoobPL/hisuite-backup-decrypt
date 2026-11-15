@@ -223,7 +223,7 @@ class OtherExportTests(unittest.TestCase):
         self.assertEqual(export.export_calls(db, self.tmp / "o", dt.timezone.utc), 2)
         text = (self.tmp / "o" / "calls.csv").read_text(encoding="utf-8-sig")
         self.assertIn("missed", text)
-        self.assertIn("2023-11-14 22:13:20,+48123456789,outgoing,61", text)
+        self.assertIn("2023-11-14 22:13:20,+48123456789,,outgoing,61", text)   # empty name column
 
     def test_contacts(self):
         db = self.tmp / "contact.db"
@@ -274,8 +274,8 @@ class OtherExportTests(unittest.TestCase):
         out = self.tmp / "o"
         self.assertEqual(export.export_messages(db, out, dt.timezone.utc), 2)
         text = (out / "messages.csv").read_text(encoding="utf-8-sig")
-        self.assertIn("SMS,received,111,2023-11-14 22:13:20,hi,", text)
-        self.assertIn("MMS,sent,222,2023-11-14 22:15:00,photo!,", text)
+        self.assertIn("SMS,received,111,,2023-11-14 22:13:20,hi,", text)
+        self.assertIn("MMS,sent,222,,2023-11-14 22:15:00,photo!,", text)
         self.assertIn("lost.gif [not extracted]", text)
         files = [p for p in (out / "mms_attachments").rglob("*") if p.is_file()]
         self.assertEqual(len(files), 1)
