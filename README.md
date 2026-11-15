@@ -27,7 +27,7 @@ undecryptable `.db`/`.tar` files from HiSuite 11 onwards. For HiSuite 10.x and o
 | Different format | HarmonyOS backups (an `info.json` with `backupKey`, `backupSalt` and per-module `encryptionIv`) are a different scheme and are **not** supported |
 
 Reports and pull requests for other versions and for the multimedia format are very welcome
-(please **never** attach a real backup to an issue).
+(please **never** attach a real backup to an issue). See [Contributing and help](#contributing-and-help).
 
 ## Install
 
@@ -202,6 +202,17 @@ python -m unittest discover -s tests -v
 * [mauronofrio/Huawei-Backup-V4-Decrypt][v4]: the newer phone-side variant, useful for comparison.
 
 Not affiliated with or endorsed by Huawei. "HiSuite" and "Huawei" are trademarks of their owner.
+
+## Contributing and help
+
+Questions, bug reports and compatibility reports go to
+[GitHub Issues](https://github.com/YacoobPL/hisuite-backup-decrypt/issues) (forms are provided).
+This is a one-person hobby project, so replies are best-effort. A useful report contains the
+output of `python -m hisuite_decrypt info "<backup folder>"` (no keys or password in it), the
+command without the password, the error, and your Python version and OS. **Never post your
+password, files from your backup, decrypted data or real phone numbers.**
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to help (other HiSuite versions, the multimedia
+archives, new exporters) and [SECURITY.md](SECURITY.md) to report a vulnerability privately.
 
 ## License
 
