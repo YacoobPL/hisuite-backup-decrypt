@@ -56,6 +56,9 @@ python -m hisuite_decrypt decrypt "HUAWEI P20 Pro_2026-01-01 12.00.00" decrypted
 
 # export from an already decrypted folder
 python -m hisuite_decrypt export decrypted export
+
+# also include Wi-Fi passwords and the smartcare database (off by default)
+python -m hisuite_decrypt export decrypted export --include-secrets
 ```
 
 The password is read from `--password-file`, from the `HISUITE_PASSWORD` environment variable,
@@ -73,9 +76,15 @@ A wrong password is detected up front (via `checkMsgV3`) and nothing is written.
 | `contact` | `contacts.vcf` (vCard 3.0), `contacts.csv` |
 | `calllog` | `calls.csv` |
 | `sms` | `messages.csv` (SMS and MMS text) and `mms_attachments/<number>/` with the MMS pictures, videos and vCards, named `date_direction_id_name` and dated like the message |
+| `Memo` attachments | `note_attachments/`: the pictures drawn in notes (unpacked from the stored archive; `.hwgraffi` is Huawei's own vector data) |
+| `alarm` | `alarms.csv` |
+| `wifiConfig` | `wifi.csv` (SSID, security, static IP, DNS, proxy). **Passwords are left out** unless you pass `--include-secrets` |
+| everything else (`weather`, `phoneManager`, `HWlanucher`, `camera`, `clock`, `setting`, `harassment`, `wallpaper`, `soundrecorder`, ...) | `other/<database>/<table>.csv`, one CSV per table (blobs shown as `<N bytes>`; bookkeeping tables skipped); pictures stored in chunks (e.g. the wallpaper) are reassembled into real files |
+| `smartcare` | skipped unless `--include-secrets` (it can hold card numbers and bookings) |
 
-All other decrypted databases (`alarm.db`, `wifiConfig.db`, ...) are written as-is; open them
-with any SQLite browser.
+The decrypted `.db` files are always written as-is too, so you can open them with any SQLite
+browser. These settings databases mostly describe how apps were configured on the phone; the
+useful ones for most people are the Wi-Fi list, alarms and the wallpaper.
 
 ## How the encryption works
 

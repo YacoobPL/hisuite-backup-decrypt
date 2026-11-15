@@ -8,7 +8,10 @@ import os
 import sys
 from pathlib import Path
 
-from . import backup, crypto, export
+from . import backup, crypto, export, export_other
+
+SECRETS_HELP = ("also export Wi-Fi passwords and the smartcare database (which may contain card numbers); "
+                "off by default")
 
 
 def _password(args: argparse.Namespace) -> bytes:
@@ -70,11 +73,11 @@ def cmd_decrypt(args: argparse.Namespace) -> int:
         print("hint: every module failed. The password may be wrong, or the backup may come from an "
               "unsupported HiSuite version (10.x and older: use kobackupdec).", file=sys.stderr)
     if args.export:
-        _export_from(out, out / "export", _tz(args.timezone))
+        _export_from(out, out / "export", _tz(args.timezone), args.include_secrets)
     return 1 if failed and failed == len(results) else 0
 
 
-def _export_from(folder: Path, out: Path, tz: dt.tzinfo | None) -> None:
+def _export_from(folder: Path, out: Path, tz: dt.tzinfo | None, include_secrets: bool = False) -> None:
     """Export every database we know how to turn into an open format."""
     jobs = (
         ("Memo.db", "notes", lambda p: export.export_notes(p, out, tz)),
@@ -89,13 +92,21 @@ def _export_from(folder: Path, out: Path, tz: dt.tzinfo | None) -> None:
         if db is not None:
             print(f"{label + ':':<17} {run(db)} -> {out}")
             done += 1
+    memo = next(folder.rglob("Memo.db"), None)
+    if memo is not None:
+        files = export_other.extract_attachments(memo, out / "note_attachments")
+        if files:
+            print(f"{'note attachments:':<17} {len(files)} files -> {out / 'note_attachments'}")
+    for line in export_other.export_others(folder, out, include_secrets):
+        print(line)
+        done += 1
     if not done:
-        print("nothing to export (none of Memo.db, calendar.db, contact.db, calllog.db, sms.db found)")
+        print("nothing to export (no known database found)")
 
 
 def cmd_export(args: argparse.Namespace) -> int:
     folder = Path(args.decrypted)
-    _export_from(folder, Path(args.output), _tz(args.timezone))
+    _export_from(folder, Path(args.output), _tz(args.timezone), args.include_secrets)
     return 0
 
 
@@ -119,8 +130,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("decrypt", help="decrypt all modules into a new folder")
     sp.add_argument("backup")
     sp.add_argument("output")
-    sp.add_argument("--export", action="store_true", help="also export notes and calendar to open formats")
+    sp.add_argument("--export", action="store_true", help="also export everything to open formats")
     sp.add_argument("--timezone", help="IANA zone for CSV/TXT timestamps, e.g. Europe/Warsaw (default: system)")
+    sp.add_argument("--include-secrets", action="store_true", help=SECRETS_HELP)
     add_pw(sp)
     sp.set_defaults(func=cmd_decrypt)
 
@@ -128,6 +140,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("decrypted")
     sp.add_argument("output")
     sp.add_argument("--timezone", help="IANA zone, e.g. Europe/Warsaw (default: system)")
+    sp.add_argument("--include-secrets", action="store_true", help=SECRETS_HELP)
     sp.set_defaults(func=cmd_export)
     return p
 
