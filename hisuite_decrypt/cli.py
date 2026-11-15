@@ -74,6 +74,9 @@ def cmd_decrypt(args: argparse.Namespace) -> int:
     failed = sum(r.status == "failed" for r in results)
     skipped = sum(r.status == "skipped" for r in results)
     print(f"{len(results) - failed - skipped} decrypted, {skipped} skipped, {failed} failed -> {out}")
+    if not args.no_extract:
+        for r in backup.extract_archives(results, out, keep_archives=args.keep_archives):
+            print(f"  [{r.status:<13}] {r.module:<20} {r.source.name}  ({r.detail})")
     if results and failed == len(results):
         print("hint: every module failed. The password may be wrong, or the backup may come from an "
               "unsupported HiSuite version (10.x and older: use kobackupdec).", file=sys.stderr)
@@ -142,6 +145,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("backup")
     sp.add_argument("output")
     sp.add_argument("--export", action="store_true", help="also export everything to open formats")
+    sp.add_argument("--no-extract", action="store_true",
+                    help="leave the decrypted multimedia .tar archives packed instead of unpacking them into media/")
+    sp.add_argument("--keep-archives", action="store_true",
+                    help="keep the decrypted .tar files after unpacking them (they are deleted by default)")
     sp.add_argument("--timezone", help="IANA zone for CSV/TXT timestamps, e.g. Europe/Warsaw (default: system)")
     sp.add_argument("--include-secrets", action="store_true", help=SECRETS_HELP)
     sp.add_argument("--names", choices=STYLES, default="both", help=NAMES_HELP)

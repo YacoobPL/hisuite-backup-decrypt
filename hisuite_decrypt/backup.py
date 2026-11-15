@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import configparser
+import os
+import tarfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from defusedxml import ElementTree as ET
 
@@ -151,9 +153,7 @@ def decrypt_backup(backup: Path, out_dir: Path, password: bytes, *, allow_legacy
     for module in parse_info_xml(backup / "info.xml"):
         for src in locate_files(backup, module):
             if src.name.lower().endswith(".enc"):
-                # Multimedia archives use a different key scheme that is not understood yet.
-                results.append(Result(module.name, src, None, "skipped", "multimedia (.enc) is not supported"))
-                continue
+                continue  # multimedia: different scheme, handled by decrypt_media() below
             rel = src.relative_to(backup)
             dst = out_dir / (rel if len(rel.parts) > 1 else Path(src.name))
             data = src.read_bytes()
@@ -173,4 +173,131 @@ def decrypt_backup(backup: Path, out_dir: Path, password: bytes, *, allow_legacy
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(plain)
             results.append(Result(module.name, src, dst, status, detail))
+    results.extend(decrypt_media(backup, out_dir, password))
     return results
+
+
+TAR_MAGIC = b"ustar"
+TAR_MAGIC_OFFSET = 257
+
+
+def _media_ivs(backup: Path, header: dict[str, str]) -> dict[Path, bytes]:
+    """Map every encrypted multimedia file to its IV (from ``<module>.xml`` and ``backupinfo.ini``)."""
+    root = backup.resolve()
+    ivs: dict[Path, bytes] = {}
+    for xml in sorted(backup.glob("*.xml")):
+        if _is_junk(xml) or xml.name.lower() == "info.xml":
+            continue
+        try:
+            tree = ET.parse(xml).getroot()
+        except Exception:  # unreadable / not a multimedia list: ignore
+            continue
+        if tree is None:
+            continue
+        for entry in tree.iter("File"):
+            rel, iv = (entry.findtext("Path") or "").strip(), (entry.findtext("Iv") or "").strip()
+            if not rel or not iv:
+                continue
+            parts = [p for p in PureWindowsPath(rel).parts if p not in ("\\", "/")]
+            target = (backup / xml.stem / Path(*parts)).with_name(PureWindowsPath(rel).name + ".enc").resolve()
+            try:
+                target.relative_to(root)           # never follow a crafted Path out of the backup
+                ivs[target] = bytes.fromhex(iv)
+            except ValueError:
+                continue
+    for kind in ("image", "video"):
+        iv = header.get(f"{kind}_iv", "").strip()
+        if iv:
+            try:
+                ivs[(backup / f"{kind}_MediaInfo.db.enc").resolve()] = bytes.fromhex(iv)
+            except ValueError:
+                continue
+    return ivs
+
+
+def decrypt_media(backup: Path, out_dir: Path, password: bytes) -> list[Result]:
+    """Decrypt ``*.tar.enc`` archives and ``*_MediaInfo.db.enc`` (see :mod:`crypto` for the scheme).
+
+    The files carry no authentication tag, so the password is checked by looking at the
+    decrypted header: ``ustar`` for a tar, the SQLite magic for a database.
+    """
+    enc_files = sorted(p for p in backup.rglob("*") if p.is_file() and p.name.lower().endswith(".enc") and not _is_junk(p))
+    if not enc_files:
+        return []
+    ini_path = backup / "backupinfo.ini"
+    header = read_ini(ini_path).get("headerinfo", {}) if ini_path.is_file() else {}
+    ivs = _media_ivs(backup, header)
+    try:
+        key = crypto.derive_media_key(password, bytes.fromhex(header.get("derivedSalt", "").strip()))
+    except ValueError:
+        key = None
+    results: list[Result] = []
+    for src in enc_files:
+        rel = src.relative_to(backup)
+        module = rel.parts[0] if len(rel.parts) > 1 else src.name.split(".")[0]
+        iv = ivs.get(src.resolve())
+        lower = src.name.lower()
+        if key is None:
+            results.append(Result(module, src, None, "skipped", "backupinfo.ini has no usable derivedSalt"))
+        elif iv is None:
+            results.append(Result(module, src, None, "skipped", "no IV found for this file (<module>.xml / backupinfo.ini)"))
+        elif not lower.endswith((".tar.enc", ".db.enc")):
+            results.append(Result(module, src, None, "skipped", "unknown multimedia file type"))
+        else:
+            head = crypto.decrypt_media_head(key, iv, src, TAR_MAGIC_OFFSET + 8)
+            good = (head[TAR_MAGIC_OFFSET:TAR_MAGIC_OFFSET + 5] == TAR_MAGIC if lower.endswith(".tar.enc")
+                    else head.startswith(SQLITE_MAGIC))
+            if not good:
+                results.append(Result(module, src, None, "failed",
+                                      "header check failed: wrong password or a scheme this tool does not know"))
+                continue
+            dst = out_dir / rel.with_name(src.name[:-4])
+            crypto.decrypt_media_file(key, iv, src, dst)
+            results.append(Result(module, src, dst, "ok", "AES-256-CTR (scrypt key), header verified"))
+    return results
+
+
+def extract_archives(results: list[Result], out_dir: Path, *, keep_archives: bool = False) -> list[Result]:
+    """Unpack the decrypted ``*.tar`` archives into ``<out_dir>/media/<module>/``.
+
+    Only regular files are written; absolute paths, ``..`` and links are refused, so a crafted
+    archive cannot write outside the target folder. The intermediate ``.tar`` is deleted unless
+    *keep_archives* is true.
+    """
+    done: list[Result] = []
+    for r in results:
+        if r.status != "ok" or r.target is None or r.target.suffix.lower() != ".tar":
+            continue
+        dest = out_dir / "media" / r.module
+        count = skipped = 0
+        try:
+            with tarfile.open(r.target) as tar:
+                for member in tar:
+                    parts = PurePosixPath(member.name.replace("\\", "/")).parts
+                    if (not member.isreg() or not parts or parts[0] == "/" or ".." in parts
+                            or PureWindowsPath(*parts).anchor):     # drive letters / UNC: refuse
+                        skipped += 1
+                        continue
+                    target = dest.joinpath(*parts)
+                    src = tar.extractfile(member)
+                    if src is None:
+                        skipped += 1
+                        continue
+                    try:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        with src, open(target, "wb") as fh:
+                            while block := src.read(1 << 20):
+                                fh.write(block)
+                        os.utime(target, (member.mtime, member.mtime))
+                    except OSError:
+                        skipped += 1       # e.g. Windows path too long
+                        continue
+                    count += 1
+        except tarfile.TarError as exc:
+            done.append(Result(r.module, r.target, None, "failed", f"cannot read tar: {exc}"))
+            continue
+        if not keep_archives:
+            r.target.unlink()
+        detail = f"{count} files" + (f", {skipped} entries not written" if skipped else "")
+        done.append(Result(r.module, r.target, dest, "ok", f"extracted: {detail}"))
+    return done

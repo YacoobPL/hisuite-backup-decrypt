@@ -19,7 +19,7 @@ body:
       label: Result
       options:
         - Everything decrypted and exported
-        - Databases decrypted, multimedia (.enc) skipped, as documented
+        - Databases decrypted, but multimedia (.enc) failed or was skipped (describe below)
         - Partly worked (describe below)
     validations:
       required: true

@@ -21,13 +21,13 @@ undecryptable `.db`/`.tar` files from HiSuite 11 onwards. For HiSuite 10.x and o
 |---|---|
 | Tested on | HiSuite `14.0.0.370`, backup of a HUAWEI P20 Pro (EMUI 10 / Android 10), Python 3.12, Windows 11 |
 | Works | all 17 database modules in that backup decrypt with a verified authentication tag |
+| Works | multimedia archives (`*.tar.enc`: photos, videos, music, documents, voice recordings) and `*_MediaInfo.db.enc`: decrypted and unpacked; every file was checked by its header (`ustar`, SQLite) and the unpacked files are valid JPEG, MP4, MP3, M4A and DOCX. Only a small backup (a handful of files) was tested, see [the scheme](#multimedia-the-scheme) |
 | Export verified | notes, calendar, contacts, call log, SMS + MMS text and MMS attachments (record counts match the counts HiSuite stores in `info.xml`; extracted attachment bytes match the database exactly) |
-| **Not supported** | multimedia archives (`*.tar.enc`, `*_MediaInfo.db.enc`): photos, videos, audio, documents, voice recordings. They use a different key scheme that I could not work out; they are reported as `skipped` |
-| Untested | other HiSuite versions / devices. HiSuite 13.x probably works (publicly posted `backupinfo.ini` files from 13.0.0.310 and 14.0.0.320 have the same fields), but I have not tried it. An unauthenticated AES-CTR fallback for older backups exists but is untested on real old backups |
+| Untested | other HiSuite versions / devices. HiSuite 13.x probably works (publicly posted `backupinfo.ini` files from 13.0.0.310 and 14.0.0.320 have the same fields), but I have not tried it. An unauthenticated AES-CTR fallback for older backups exists but is untested on real old backups. Large multimedia backups (many archives, several GB) and archives split into `images1.tar`, `images2.tar`, ... are handled the same way but were not tried |
 | Different format | HarmonyOS backups (an `info.json` with `backupKey`, `backupSalt` and per-module `encryptionIv`) are a different scheme and are **not** supported |
 
-Reports and pull requests for other versions and for the multimedia format are very welcome
-(please **never** attach a real backup to an issue). See [Contributing and help](#contributing-and-help).
+Reports and pull requests for other versions are very welcome (please **never** attach a real
+backup to an issue). See [Contributing and help](#contributing-and-help).
 
 ## Install
 
@@ -53,6 +53,12 @@ python -m hisuite_decrypt verify "HUAWEI P20 Pro_2026-01-01 12.00.00"
 
 # decrypt everything into a NEW folder, and export to open formats
 python -m hisuite_decrypt decrypt "HUAWEI P20 Pro_2026-01-01 12.00.00" decrypted --export --timezone Europe/Warsaw
+
+# leave the multimedia archives packed (*.tar) instead of unpacking them into decrypted/media/
+python -m hisuite_decrypt decrypt "HUAWEI P20 Pro_2026-01-01 12.00.00" decrypted --no-extract
+
+# unpack, but also keep the decrypted .tar files (they are deleted by default to save space)
+python -m hisuite_decrypt decrypt "HUAWEI P20 Pro_2026-01-01 12.00.00" decrypted --keep-archives
 
 # export from an already decrypted folder
 python -m hisuite_decrypt export decrypted export
@@ -88,12 +94,16 @@ The password is read from `--password-file`, from the `HISUITE_PASSWORD` environ
 or from an interactive prompt. There is deliberately **no `--password` flag**: command-line
 arguments end up in shell history and process lists.
 
-A wrong password is detected up front (via `checkMsgV3`) and nothing is written.
+A wrong password is detected up front (via `checkMsgV3`) and nothing is written. The multimedia
+files have no checksum, so a wrong password shows up there as `failed ... header check failed`
+and nothing is written for that file.
 
 ### Exported files
 
 | Module | Output |
 |---|---|
+| `picture`, `video`, `audio`, `document`, `soundrecorder` (multimedia) | `media/<module>/...`: the original files as they were on the phone, with their original modification times. Only regular files are unpacked; absolute paths, `..` and links inside an archive are refused |
+| `image_MediaInfo.db.enc`, `video_MediaInfo.db.enc` | `image_MediaInfo.db`, `video_MediaInfo.db` (SQLite, an index of the pictures and videos) |
 | `Memo` | `notes.txt`, `notes.csv` (bullet lists and to-do items preserved as text) |
 | `calendar` | `calendar.ics` (importable into Google Calendar / Outlook, keeps recurrence and reminders), `calendar.csv` |
 | `contact` | `contacts.vcf` (vCard 3.0), `contacts.csv` |
@@ -132,42 +142,45 @@ are the GCM tag, so a plain AES-CTR attempt produces garbage that never looks li
 `backupinfo.ini` is UTF-16 with a BOM; the fields `derivedSalt`, `pwdsalt`, `pwdsalt_iv` and
 `password` in it are **not** needed for the database modules.
 
-## Multimedia (`*.enc`): what was tried
+## Multimedia: the scheme
 
-The multimedia archives (`<module>/storage/.../*.tar.enc`, with a 16-byte `<Iv>` in `picture.xml`,
-`video.xml`, ...) and `image_MediaInfo.db.enc` / `video_MediaInfo.db.enc` (IV in `image_iv` /
-`video_iv` of `backupinfo.ini`) are plain streams: their size is a multiple of 512 / 4096
-bytes, there is no tag and no repeated 16-byte blocks (so not ECB). `info.xml` has no `encMsgV3`
-for them. The oracle used was `ustar` at offset 257 of the decrypted tar (and the SQLite magic).
-All of these failed with the correct password (not every mode/key combination was tried; the
-list shows the families covered):
+The archives `<module>/storage/.../*.tar.enc` and `image_MediaInfo.db.enc` / `video_MediaInfo.db.enc`
+use a different scheme from the databases. It is also verified against HiSuite 14.0.0.370:
 
-* AES-128/256 in CTR, CBC, CFB, OFB, ECB and GCM (streaming, no tag check), with the key taken as
-  `SHA-256(password)` (full and first 16 bytes), `MD5`, the old `SHA1PRNG` derivation, or
-  `PBKDF2-HMAC-SHA256(password, salt, n)` for `n` from 1 to 100000 and the salts
-  `derivedSalt`, `pwdsalt` (whole / first 16 / first 32 bytes), `pwdsalt_iv`, the `<Iv>` or no salt;
-* unwrapping the `password` blob of `backupinfo.ini` with those keys.
+```text
+derivedSalt = bytes.fromhex(backupinfo.ini  [headerinfo]  derivedSalt)        # 16 bytes
 
-* PBKDF2 with SHA-1/224/384/512 and MD5 (not only SHA-256) over the same salts and iteration
-  counts, with AES in CTR, CBC and CFB128, using the `<Iv>` / zero / `pwdsalt_iv` as IV, with the
-  derived bytes used raw or as a hex string.
+key = scrypt( SHA-256(password), derivedSalt, N=2^15, r=8, p=2, dklen=32 )
 
-### Where the multimedia key is *not*
+plaintext = AES-256-CTR(key, counter block = IV, as a 128-bit big-endian integer)
 
-The phone app `KoBackup_N.apk` that ships with HiSuite (decompiled with jadx) contains the
-`BackupSecurityV3` class: it encrypts with AES-GCM, derives the key as
-`PBKDF2(password, seed given as a hex string)`, verifies passwords with `checkMsgV3`, and falls
-back to AES-CTR for old backups. That matches what this tool does for the database modules.
-The fields `derivedSalt`, `pwdsalt`, `image_iv`, `video_iv` and `mdataisencypt`, however, do not
-appear in `KoBackup_N.apk`, `LocalBackup.apk` or `HiSuite.apk`; they only appear in the native
-PC program `HiSuite.exe`. That program uses low-level OpenSSL (`AES_cbc_encrypt`,
-`CRYPTO_ctr128_encrypt`; `CommBase.dll` also has `AES_cfb128_encrypt` and `PKCS5_PBKDF2_HMAC`),
-so the multimedia key is most likely derived in native PC code. The next step would be
-disassembling `HiSuite.exe` / `CommBase.dll` (for example with Ghidra).
+IV of an archive   = <Iv> of its <File> entry in <module>.xml  (picture.xml, video.xml, audio.xml, ...)
+IV of the MediaInfo = image_iv / video_iv in backupinfo.ini
+```
 
-Workarounds that users report: restoring the backup to a Huawei phone with HiSuite (decrypts
-everything), or creating the backup with an old HiSuite (10.x) and decrypting it with
-`kobackupdec`.
+There is no authentication tag. The password is therefore checked by the decrypted header: the
+magic `ustar` at offset 257 of a tar, or `SQLite format 3` for the databases. A wrong key gives
+random bytes, which this tool reports as `failed`.
+
+How it was found: the earlier attempts (AES in every mode with keys from `SHA-256`, `MD5`,
+`PBKDF2` over all the salts in `backupinfo.ini`, unwrapping the `password` blob, ...) all failed,
+and the phone-side apps do not contain these fields. The key derivation lives in the native PC
+program. Instead of disassembling it, the author ran HiSuite on their **own** backup and logged
+the arguments of the OpenSSL calls (`PKCS5_PBKDF2_HMAC`, `EVP_PBE_scrypt`) while it prepared a restore.
+There were two `scrypt` calls: the first one (the password with a 32-byte salt, 256 bytes of output) is not needed
+here; the second one takes `SHA-256(password)` and `derivedSalt` and its output decrypts the media
+files. No Huawei code or key material is included in this repository. HiSuite also calls PBKDF2
+(300000 iterations, 8-digit input) while pairing with the phone; that is the verification code
+shown on the phone and unrelated to backups.
+
+Two details that cost time: `<Path>` in `picture.xml` names `...\images0.tar`, but the file on disk
+is `images0.tar.enc`; and the PBKDF2 / GCM scheme of the database modules does **not** apply to
+the media at all (no `encMsgV3` for them in `info.xml`).
+
+HiSuite 14.0.0.380 (the version offered for download in November 2026) does not accept the folder
+layout written by 370 as it is: it looks for the databases in `check/` and for `info.xml`,
+`backupinfo.ini`, `cinfoset.dat` and `<module>.xml` inside every module folder. If you want to
+restore an old backup with the official program, install the HiSuite version that made it.
 
 ## Troubleshooting
 

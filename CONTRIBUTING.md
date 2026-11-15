@@ -35,9 +35,9 @@ The most useful contributions:
 
 1. **Other HiSuite versions and devices.** Tell me whether it worked (the `info` output above plus
    "worked / did not work" is enough). HiSuite 13.x is expected to work but is untested.
-2. **The multimedia archives (`*.tar.enc`).** This is the big open problem; the README lists what
-   was already tried. The key is probably derived in the native `HiSuite.exe`, so the next step
-   would be disassembling it.
+2. **Larger multimedia backups.** The multimedia scheme (see the README) was verified on a small
+   backup only. Reports from backups with many or very large archives, split archives
+   (`images1.tar`, ...) or other media types are valuable: say whether the files opened correctly.
 3. **More exporters**, for example other modules or formats you need.
 
 ### Development setup
